@@ -1,0 +1,62 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Any signed-in user can read profiles (needed to show doctor/patient
+    // names and search doctors). Users manage their own doc; only an Admin
+    // may change another user's doc (e.g. approving a doctor).
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow delete: if false;
+
+      // A user's own in-app notifications ("mailbox"). Anyone signed in can
+      // create one for someone else (e.g. a doctor notifying their patient);
+      // only the owner can read/mark them read.
+      match /notifications/{notificationId} {
+        allow read, update, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn();
+      }
+    }
+
+    // Appointments are visible/editable by the patient or doctor on them,
+    // or by an Admin. Created by the patient booking it.
+    match /appointments/{appointmentId} {
+      allow read: if isSignedIn() &&
+        (resource.data.patientId == request.auth.uid ||
+         resource.data.doctorId == request.auth.uid ||
+         isAdmin());
+      allow create: if isSignedIn() && request.resource.data.patientId == request.auth.uid;
+      allow update: if isSignedIn() &&
+        (resource.data.patientId == request.auth.uid ||
+         resource.data.doctorId == request.auth.uid ||
+         isAdmin());
+      allow delete: if false;
+    }
+
+    // Specialties: readable by anyone signed in, writable only by Admin.
+    match /specialties/{specialtyId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Reviews: created once by the patient on a completed appointment;
+    // readable by anyone signed in (doctor profile + admin feedback screen).
+    match /reviews/{reviewId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.patientId == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}
